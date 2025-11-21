@@ -3,7 +3,6 @@ use std::fs;
 use std::path::PathBuf;
 use anyhow::{Context, Result};
 
-/// ファイル管理CLIツールの引数定義
 #[derive(Parser)]
 #[command(name = "rfm")] // アプリ名
 #[command(about = "Rust製ファイルマネージャー", long_about = None)]

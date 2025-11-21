@@ -17,8 +17,6 @@ jobs:
   build:
     name: Build - ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write  # リリースを作成する権限
     strategy:
       matrix:
         include:
@@ -72,14 +70,40 @@ jobs:
           RUSTFLAGS: ${{ matrix.rustflags }}
 
       # ビルド成果物をリネーム（アップロード用に分かりやすい名前にする）
-      - name: Rename binary
+      - name: Rename binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item -Path "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" -Destination "${{ matrix.asset_name }}"
+
+      - name: Rename binary (Linux/macOS)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
-          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+          cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" "${{ matrix.asset_name }}"
 
-      # リリースページにアップロード
-      - name: Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
+      # アーティファクトとしてアップロード
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: ${{ matrix.asset_name }}
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*

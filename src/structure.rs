@@ -32,7 +32,7 @@ impl FolderStructure {
             StandardPath::new("3_docs/icon", PathType::DocsIcon),
             StandardPath::new("3_docs/meme", PathType::DocsMeme),
             StandardPath::new("4_apps", PathType::Apps),
-            StandardPath::new("5_gollery", PathType::Gallery),
+            StandardPath::new("5_gallery", PathType::Gallery),
             StandardPath::new("9_archive", PathType::Archive),
         ]
     }

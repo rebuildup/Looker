@@ -279,17 +279,25 @@ fn run_interactive_mode() -> Result<()> {
                 
                 result.print_report();
                 
-                if !result.actions.is_empty() && !dry_run {
-                    let confirm = inquire::Confirm::new("整理を実行しますか？")
-                        .with_default(true)
-                        .prompt()?;
-                    
-                    if confirm {
-                        let pb = UI::loading("実行中...");
-                        RecordManager::execute_actions(&result.actions, dry_run)?;
-                        pb.finish_and_clear();
-                        UI::success("Recordフォルダの整理が完了しました");
+                if !result.actions.is_empty() {
+                    if dry_run {
+                        UI::info("ドライランモードのため、実際には実行されませんでした");
+                    } else {
+                        let confirm = inquire::Confirm::new("整理を実行しますか？")
+                            .with_default(true)
+                            .prompt()?;
+                        
+                        if confirm {
+                            let pb = UI::loading("実行中...");
+                            RecordManager::execute_actions(&result.actions, dry_run)?;
+                            pb.finish_and_clear();
+                            UI::success("Recordフォルダの整理が完了しました");
+                        } else {
+                            UI::info("実行がキャンセルされました");
+                        }
                     }
+                } else {
+                    UI::info("整理が必要なファイルは見つかりませんでした");
                 }
                 UI::separator();
             }

@@ -179,14 +179,14 @@ root/
 │ ├ downloads/
 │ └ record/
 │   ├ screen capture/
-│   │ ├ YYYY/MM/ #1年以上前
-│   │ └ MM/
+│   │ ├ YYYY/YYYYMM/ #去年以前
+│   │ └ YYYYMM/ #今年
 │   ├ screen record/
-│   │ ├ YYYY/MM/ #1年以上前
-│   │ └ MM/
+│   │ ├ YYYY/YYYYMM/ #去年以前
+│   │ └ YYYYMM/ #今年
 │   └ voice record/
-│     ├ YYYY/MM/ #1年以上前
-│     └ MM/
+│     ├ YYYY/YYYYMM/ #去年以前
+│     └ YYYYMM/ #今年
 ├ 1_projects/[category]/[project]/ #プロジェクト単位でアクセスする前提のファイル
 ├ 2_assets/    #メディアファイル
 │ ├ footage/[category]/
@@ -205,7 +205,7 @@ root/
 │ ├ icon/
 │ └ meme/
 ├ 4_apps/[app_name]/[app_folder]/ #アプリケーション
-├ 5_gollery/ #完成品メディアファイルをlinkファイル
+├ 5_gallery/ #完成品メディアファイルをlinkファイル
 ├ 9_archive/ #使用する予定の無いファイルやフォルダをzipファイル
 
 ```
@@ -232,14 +232,16 @@ YYYYMMDDHHMMSS_[screen-capture/screen-record/voice-record].[extension]
 Recordフォルダ内のファイルは、以下のルールに従って自動整理されます：
 
 - **日付による分類**:
-  - ファイルの更新日時が1年以上前: `YYYY/MM/` フォルダに配置
-  - ファイルの更新日時が1年以内: `MM/` フォルダに配置
+  - **去年以前のファイル**: `YYYY/YYYYMM/` フォルダに配置（例: `2023/202312/`）
+  - **今年のファイル**: `YYYYMM/` フォルダに配置（例: `202412/`）
 - **命名規則の適用**:
   - 命名規則に従っていないファイルは、ファイルの更新日時を基に自動リネーム
   - 形式: `YYYYMMDDHHMMSS_[screen-capture/screen-record/voice-record].[extension]`
-- **自動移動**:
+  - 例: `20240101120000_screen-capture.png`
+- **自動移動とフォルダ作成**:
   - 適切なフォルダが存在しない場合は自動作成
   - ファイルを適切なフォルダに自動移動
+  - 各recordタイプ（screen capture, screen record, voice record）ごとにフォルダが自動作成されます
 
 ## 特徴
 
@@ -258,10 +260,10 @@ Recordフォルダ内のファイルは、以下のルールに従って自動�
 ### Recordフォルダ自動整理
 
 - **日付ベースの分類**: ファイルの更新日時に基づいて自動分類
-  - 1年以上前のファイル: `YYYY/MM/` フォルダに配置
-  - 1年以内のファイル: `MM/` フォルダに配置
+  - **去年以前のファイル**: `YYYY/YYYYMM/` フォルダに配置（例: `2023/202312/`）
+  - **今年のファイル**: `YYYYMM/` フォルダに配置（例: `202412/`）
 - **自動リネーム**: 命名規則に従っていないファイルを自動的にリネーム
-- **フォルダ自動作成**: 必要なフォルダを自動的に作成
+- **フォルダ自動作成**: 必要なフォルダを自動的に作成（各recordタイプごと）
 
 ## 開発
 

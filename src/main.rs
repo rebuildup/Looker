@@ -1,312 +1,193 @@
-mod structure;
-mod scanner;
 mod naming;
-mod recommender;
-mod executor;
 mod record_manager;
-mod ui;
-mod menu;
-mod utils;
+mod scanner;
 
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
+use clap::{Parser, ValueEnum};
+use record_manager::{
+    ActionType, RecordFileAction, RecordManager, RecordOptions, RecordOrganizationPlan, RecordType,
+};
 
-use structure::FolderStructure;
-use scanner::DriveScanner;
-use recommender::PlacementRecommender;
-use executor::Executor;
-use record_manager::RecordManager;
-use menu::{Menu, MenuAction};
-use ui::UI;
-
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(name = "looker")]
-#[command(about = "外付けSSDのフォルダ構造を最適化するCLIアプリケーション", long_about = None)]
+#[command(about = "Recordフォルダを実用的に整理するための軽量CLI")]
 struct Cli {
-    #[command(subcommand)]
-    command: Commands,
+    /// 0_inbox/record を含むルートディレクトリ
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    root: PathBuf,
+
+    /// Recordフォルダを直接指定したい場合はこちらを使用
+    #[arg(long, value_name = "PATH")]
+    record_path: Option<PathBuf>,
+
+    /// 対象とするrecord種別（複数指定可）
+    #[arg(long = "record-type", value_enum)]
+    record_types: Vec<RecordKind>,
+
+    /// screen/voiceなどの取り違いチェックを省略して高速化
+    #[arg(long)]
+    fast: bool,
+
+    /// 計画された変更を実際に適用
+    #[arg(long)]
+    apply: bool,
+
+    /// 確認なしで適用（--applyを暗黙的に有効化）
+    #[arg(long, alias = "y")]
+    yes: bool,
+
+    /// すべての予定アクションとフォルダ作成を表示
+    #[arg(long)]
+    verbose: bool,
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    /// フォルダ構造を検証
-    Validate {
-        /// ルートディレクトリ
-        #[arg(default_value = ".")]
-        root: PathBuf,
-    },
-    /// ドライブ全体をスキャン
-    Scan {
-        /// スキャンするパス
-        #[arg(default_value = ".")]
-        path: PathBuf,
-    },
-    /// 推奨配置を提案
-    Recommend {
-        /// スキャンするパス
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        /// ルートディレクトリ（推奨先の基準）
-        #[arg(default_value = ".")]
-        root: PathBuf,
-    },
-    /// 標準フォルダ構造を作成
-    Init {
-        /// ルートディレクトリ
-        #[arg(default_value = ".")]
-        root: PathBuf,
-        /// ドライラン（実際には実行しない）
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// 推奨配置を実行
-    Execute {
-        /// スキャンするパス
-        #[arg(default_value = ".")]
-        path: PathBuf,
-        /// ルートディレクトリ
-        #[arg(default_value = ".")]
-        root: PathBuf,
-        /// ドライラン（実際には実行しない）
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// 命名規則をチェック
-    CheckNaming {
-        /// チェックするパス
-        path: PathBuf,
-        /// recordフォルダ内のファイルかどうか
-        #[arg(long)]
-        is_record: bool,
-    },
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum RecordKind {
+    ScreenCapture,
+    ScreenRecord,
+    VoiceRecord,
+}
+
+impl From<RecordKind> for RecordType {
+    fn from(kind: RecordKind) -> Self {
+        match kind {
+            RecordKind::ScreenCapture => RecordType::ScreenCapture,
+            RecordKind::ScreenRecord => RecordType::ScreenRecord,
+            RecordKind::VoiceRecord => RecordType::VoiceRecord,
+        }
+    }
 }
 
 fn main() -> Result<()> {
-    // 引数が指定されている場合は従来のCLIモード
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 {
-        return run_cli_mode();
+    let args = Cli::parse();
+    let mut record_root = args
+        .record_path
+        .unwrap_or_else(|| args.root.join("0_inbox").join("record"));
+    if record_root.as_os_str().is_empty() {
+        record_root = PathBuf::from(".");
     }
 
-    // 引数がない場合は対話型メニュー
-    run_interactive_mode()
-}
-
-fn run_cli_mode() -> Result<()> {
-    let cli = Cli::parse();
-
-    match &cli.command {
-        Commands::Validate { root } => {
-            let result = FolderStructure::validate_structure(root)?;
-            result.print_report();
-        }
-        Commands::Scan { path } => {
-            println!("スキャン中: {:?}", path);
-            let files = DriveScanner::scan(path)?;
-            let categories = DriveScanner::categorize_files(&files);
-            categories.print_summary();
-        }
-        Commands::Recommend { path, root } => {
-            println!("スキャン中: {:?}", path);
-            let files = DriveScanner::scan(path)?;
-            let file_infos: Vec<_> = files.iter()
-                .filter(|f| !f.is_dir)
-                .cloned()
-                .collect();
-
-            println!("\n推奨配置を生成中...");
-            let recommendations = PlacementRecommender::recommend_batch(&file_infos, root);
-
-            println!("\n=== 推奨配置 ===");
-            for rec in &recommendations {
-                rec.print();
-            }
-        }
-        Commands::Init { root, dry_run } => {
-            let executor = Executor::new(*dry_run);
-            if *dry_run {
-                println!("[DRY RUN] 標準フォルダ構造を作成します");
-            } else {
-                println!("標準フォルダ構造を作成します");
-            }
-            executor.create_standard_structure(root)?;
-            println!("完了しました");
-        }
-        Commands::Execute { path, root, dry_run } => {
-            let executor = Executor::new(*dry_run);
-            
-            if *dry_run {
-                println!("[DRY RUN] 推奨配置を実行します");
-            } else {
-                println!("推奨配置を実行します");
-            }
-
-            println!("スキャン中: {:?}", path);
-            let files = DriveScanner::scan(path)?;
-            let file_infos: Vec<_> = files.iter()
-                .filter(|f| !f.is_dir)
-                .cloned()
-                .collect();
-
-            let recommendations = PlacementRecommender::recommend_batch(&file_infos, root);
-            let result = executor.execute_recommendations(&recommendations)?;
-            result.print_report();
-        }
-        Commands::CheckNaming { path, is_record } => {
-            let validation = naming::NamingRule::validate_filename(path, *is_record);
-            validation.print_report();
-        }
+    let mut options = RecordOptions {
+        check_misplaced: !args.fast,
+        ..RecordOptions::default()
+    };
+    if !args.record_types.is_empty() {
+        options
+            .target_types
+            .extend(args.record_types.iter().map(|kind| RecordType::from(*kind)));
     }
+
+    let plan = RecordManager::plan(&record_root, &options)?;
+    print_plan_summary(&plan, args.verbose);
+
+    if plan.is_empty() {
+        println!("Recordフォルダは既に整っています。");
+        return Ok(());
+    }
+
+    let apply_changes = args.apply || args.yes;
+    if !apply_changes {
+        println!("\n--apply を指定すると上記の変更を適用できます。");
+        return Ok(());
+    }
+
+    if !args.yes && !confirm("変更を適用しますか?")? {
+        println!("適用をキャンセルしました。");
+        return Ok(());
+    }
+
+    RecordManager::apply(&plan)?;
+    println!(
+        "フォルダ作成 {} 件 / ファイル操作 {} 件を適用しました。",
+        plan.required_folders.len(),
+        plan.actions.len()
+    );
 
     Ok(())
 }
 
-fn run_interactive_mode() -> Result<()> {
-    UI::print_title();
+fn print_plan_summary(plan: &RecordOrganizationPlan, verbose: bool) {
+    println!("Recordフォルダ: {}", plan.record_root.display());
+    println!("作成が必要なフォルダ: {}", plan.required_folders.len());
+    if !plan.required_folders.is_empty() {
+        let lines = plan
+            .required_folders
+            .iter()
+            .map(|p| format!("  - {}", display_path(p)));
+        show_preview(lines, verbose);
+    }
 
-    loop {
-        let action = Menu::show_main_menu()?;
+    println!("ファイル操作数: {}", plan.actions.len());
+    if !plan.actions.is_empty() {
+        let formatter = |action: &RecordFileAction| -> String {
+            match action.action_type {
+                ActionType::Move => format!(
+                    "[MOVE] {} -> {}",
+                    display_path(&action.source),
+                    display_path(&action.target)
+                ),
+                ActionType::Rename => format!(
+                    "[RENAME] {} -> {}",
+                    display_path(&action.source),
+                    display_path(&action.target)
+                ),
+                ActionType::MoveToCorrectLocation => format!(
+                    "[RELOCATE] {} -> {}",
+                    display_path(&action.source),
+                    display_path(&action.target)
+                ),
+            }
+        };
 
-        match action {
-            MenuAction::ValidateStructure => {
-                UI::section("フォルダ構造の検証");
-                let root = Menu::select_drive()?;
-                UI::info(&format!("検証中: {}", root.display()));
-                
-                let pb = UI::loading("検証中...");
-                let result = FolderStructure::validate_structure(&root)?;
-                pb.finish_and_clear();
-                
-                result.print_report();
-                UI::separator();
-            }
-            MenuAction::ScanDrive => {
-                UI::section("ドライブのスキャン");
-                let path = Menu::select_drive()?;
-                UI::info(&format!("スキャン中: {}", path.display()));
-                
-                let pb = UI::loading("スキャン中...");
-                let files = DriveScanner::scan(&path)?;
-                let categories = DriveScanner::categorize_files(&files);
-                pb.finish_and_clear();
-                
-                categories.print_summary();
-                UI::separator();
-            }
-            MenuAction::RecommendPlacement => {
-                UI::section("推奨配置の提案");
-                let root = Menu::select_drive()?;
-                UI::info(&format!("スキャン中: {}", root.display()));
-                
-                let pb = UI::loading("スキャン中...");
-                let files = DriveScanner::scan(&root)?;
-                let file_infos: Vec<_> = files.iter()
-                    .filter(|f| !f.is_dir)
-                    .cloned()
-                    .collect();
-                pb.finish_and_clear();
-                
-                let pb = UI::loading("推奨配置を生成中...");
-                let recommendations = PlacementRecommender::recommend_batch(&file_infos, &root);
-                pb.finish_and_clear();
-                
-                UI::section("推奨配置");
-                for rec in &recommendations {
-                    rec.print();
-                }
-                UI::separator();
-            }
-            MenuAction::InitStructure => {
-                UI::section("標準フォルダ構造の作成");
-                let root = Menu::select_drive()?;
-                let dry_run = Menu::confirm_dry_run()?;
-                
-                let executor = Executor::new(dry_run);
-                if dry_run {
-                    UI::warning("ドライランモード: 実際には作成しません");
-                }
-                
-                let pb = UI::loading("フォルダ構造を作成中...");
-                executor.create_standard_structure(&root)?;
-                pb.finish_and_clear();
-                
-                UI::success("標準フォルダ構造の作成が完了しました");
-                UI::separator();
-            }
-            MenuAction::ExecutePlacement => {
-                UI::section("推奨配置の実行");
-                let root = Menu::select_drive()?;
-                let dry_run = Menu::confirm_dry_run()?;
-                
-                let executor = Executor::new(dry_run);
-                if dry_run {
-                    UI::warning("ドライランモード: 実際には実行しません");
-                }
-                
-                UI::info(&format!("スキャン中: {}", root.display()));
-                let pb = UI::loading("スキャン中...");
-                let files = DriveScanner::scan(&root)?;
-                let file_infos: Vec<_> = files.iter()
-                    .filter(|f| !f.is_dir)
-                    .cloned()
-                    .collect();
-                pb.finish_and_clear();
-                
-                let pb = UI::loading("推奨配置を生成中...");
-                let recommendations = PlacementRecommender::recommend_batch(&file_infos, &root);
-                pb.finish_and_clear();
-                
-                let pb = UI::loading("ファイルを移動中...");
-                let result = executor.execute_recommendations(&recommendations)?;
-                pb.finish_and_clear();
-                
-                result.print_report();
-                UI::separator();
-            }
-            MenuAction::OrganizeRecords => {
-                UI::section("Recordフォルダの整理");
-                let root = Menu::select_drive()?;
-                let dry_run = Menu::confirm_dry_run()?;
-                
-                if dry_run {
-                    UI::warning("ドライランモード: 実際には実行しません");
-                }
-                
-                let pb = UI::loading("Recordフォルダを整理中...");
-                let result = RecordManager::organize_records(&root, dry_run)?;
-                pb.finish_and_clear();
-                
-                result.print_report();
-                
-                if !result.actions.is_empty() {
-                    if dry_run {
-                        UI::info("ドライランモードのため、実際には実行されませんでした");
-                    } else {
-                        let confirm = inquire::Confirm::new("整理を実行しますか？")
-                            .with_default(true)
-                            .prompt()?;
-                        
-                        if confirm {
-                            let pb = UI::loading("実行中...");
-                            RecordManager::execute_actions(&result.actions, dry_run)?;
-                            pb.finish_and_clear();
-                            UI::success("Recordフォルダの整理が完了しました");
-                        } else {
-                            UI::info("実行がキャンセルされました");
-                        }
-                    }
-                } else {
-                    UI::info("整理が必要なファイルは見つかりませんでした");
-                }
-                UI::separator();
-            }
-            MenuAction::Exit => {
-                UI::info("終了します");
-                break;
-            }
+        let lines = plan.actions.iter().map(|a| format!("  - {}", formatter(a)));
+        show_preview(lines, verbose);
+    }
+}
+
+fn show_preview<I>(items: I, verbose: bool)
+where
+    I: Iterator<Item = String>,
+{
+    let limit = if verbose { usize::MAX } else { 10 };
+    let mut count = 0usize;
+    let mut buffer: Vec<String> = Vec::new();
+
+    for item in items {
+        if verbose {
+            println!("{item}");
+            count += 1;
+            continue;
+        }
+
+        if count < limit {
+            buffer.push(item);
+        }
+        count += 1;
+    }
+
+    if !verbose {
+        for line in &buffer {
+            println!("{line}");
         }
     }
 
-    Ok(())
+    if !verbose && count > limit {
+        println!("  ...あと {} 件", count - limit);
+    }
+}
+
+fn display_path(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+fn confirm(prompt: &str) -> Result<bool> {
+    print!("{prompt} [y/N]: ");
+    io::stdout().flush().ok();
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let normalized = input.trim().to_ascii_lowercase();
+    Ok(matches!(normalized.as_str(), "y" | "yes"))
 }

@@ -1,0 +1,4 @@
+#include <windows.h>
+
+1 ICON "looker-icon.ico"
+

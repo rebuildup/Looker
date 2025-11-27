@@ -9,6 +9,9 @@ clap = { version = "4.5.53", features = ["derive"] }
 regex = "1.11.0"
 chrono = "0.4.38"
 walkdir = "2.5.0"
+colored = "2.1.0"
+indicatif = "0.17.8"
+inquire = "0.7.0"
 
 [build-dependencies]
 embed-resource = "2.4.2"

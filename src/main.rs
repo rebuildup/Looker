@@ -1,15 +1,17 @@
+mod menu;
 mod naming;
 mod record_manager;
 mod scanner;
+mod ui;
 
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
-use record_manager::{
-    ActionType, RecordFileAction, RecordManager, RecordOptions, RecordOrganizationPlan, RecordType,
-};
+use menu::{Menu, MenuAction};
+use record_manager::{RecordManager, RecordOptions, RecordType};
+use ui::UI;
 
 #[derive(Parser, Debug)]
 #[command(name = "looker")]
@@ -62,6 +64,13 @@ impl From<RecordKind> for RecordType {
 }
 
 fn main() -> Result<()> {
+    if std::env::args().len() == 1 {
+        return run_interactive_mode();
+    }
+    run_cli_mode()
+}
+
+fn run_cli_mode() -> Result<()> {
     let args = Cli::parse();
     let mut record_root = args
         .record_path
@@ -81,7 +90,7 @@ fn main() -> Result<()> {
     }
 
     let plan = RecordManager::plan(&record_root, &options)?;
-    print_plan_summary(&plan, args.verbose);
+    UI::render_plan_summary(&plan, args.verbose);
 
     if plan.is_empty() {
         println!("Recordフォルダは既に整っています。");
@@ -109,80 +118,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn print_plan_summary(plan: &RecordOrganizationPlan, verbose: bool) {
-    println!("Recordフォルダ: {}", plan.record_root.display());
-    println!("作成が必要なフォルダ: {}", plan.required_folders.len());
-    if !plan.required_folders.is_empty() {
-        let lines = plan
-            .required_folders
-            .iter()
-            .map(|p| format!("  - {}", display_path(p)));
-        show_preview(lines, verbose);
-    }
-
-    println!("ファイル操作数: {}", plan.actions.len());
-    if !plan.actions.is_empty() {
-        let formatter = |action: &RecordFileAction| -> String {
-            match action.action_type {
-                ActionType::Move => format!(
-                    "[MOVE] {} -> {}",
-                    display_path(&action.source),
-                    display_path(&action.target)
-                ),
-                ActionType::Rename => format!(
-                    "[RENAME] {} -> {}",
-                    display_path(&action.source),
-                    display_path(&action.target)
-                ),
-                ActionType::MoveToCorrectLocation => format!(
-                    "[RELOCATE] {} -> {}",
-                    display_path(&action.source),
-                    display_path(&action.target)
-                ),
-            }
-        };
-
-        let lines = plan.actions.iter().map(|a| format!("  - {}", formatter(a)));
-        show_preview(lines, verbose);
-    }
-}
-
-fn show_preview<I>(items: I, verbose: bool)
-where
-    I: Iterator<Item = String>,
-{
-    let limit = if verbose { usize::MAX } else { 10 };
-    let mut count = 0usize;
-    let mut buffer: Vec<String> = Vec::new();
-
-    for item in items {
-        if verbose {
-            println!("{item}");
-            count += 1;
-            continue;
-        }
-
-        if count < limit {
-            buffer.push(item);
-        }
-        count += 1;
-    }
-
-    if !verbose {
-        for line in &buffer {
-            println!("{line}");
-        }
-    }
-
-    if !verbose && count > limit {
-        println!("  ...あと {} 件", count - limit);
-    }
-}
-
-fn display_path(path: &Path) -> String {
-    path.to_string_lossy().to_string()
-}
-
 fn confirm(prompt: &str) -> Result<bool> {
     print!("{prompt} [y/N]: ");
     io::stdout().flush().ok();
@@ -190,4 +125,61 @@ fn confirm(prompt: &str) -> Result<bool> {
     io::stdin().read_line(&mut input)?;
     let normalized = input.trim().to_ascii_lowercase();
     Ok(matches!(normalized.as_str(), "y" | "yes"))
+}
+
+fn run_interactive_mode() -> Result<()> {
+    UI::print_title();
+
+    loop {
+        match Menu::show_main_menu()? {
+            MenuAction::AnalyzeOnly => handle_interactive_flow(false)?,
+            MenuAction::OrganizeNow => handle_interactive_flow(true)?,
+            MenuAction::Exit => {
+                UI::info("終了します");
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_interactive_flow(apply: bool) -> Result<()> {
+    let record_root = Menu::ask_record_root()?;
+    let options = Menu::ask_record_options()?;
+
+    if apply {
+        UI::section("Recordフォルダ整理（プレビュー＆実行）");
+    } else {
+        UI::section("Recordフォルダのプレビュー");
+    }
+
+    UI::info(&format!("対象: {}", record_root.display()));
+
+    let spinner = UI::loading("フォルダを解析中...");
+    let plan = RecordManager::plan(&record_root, &options)?;
+    spinner.finish_and_clear();
+
+    UI::render_plan_summary(&plan, false);
+
+    if plan.is_empty() {
+        UI::success("整理は不要です。");
+        return Ok(());
+    }
+
+    if !apply {
+        UI::info("適用は行わず、メニューに戻ります。");
+        return Ok(());
+    }
+
+    if Menu::confirm_execution(plan.actions.len())? {
+        let spinner = UI::loading("変更を適用中...");
+        RecordManager::apply(&plan)?;
+        spinner.finish_and_clear();
+        UI::success("すべての変更を適用しました。");
+    } else {
+        UI::warning("適用をキャンセルしました。");
+    }
+
+    Ok(())
 }

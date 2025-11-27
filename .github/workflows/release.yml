@@ -24,7 +24,6 @@ jobs:
           # --- Windows (x64) ---
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            # Windows用の設定: .exeがつく
             artifact_name: Looker.exe
             asset_name: Looker-windows-x86_64.exe
             # VC++ランタイムを埋め込むフラグ
@@ -70,18 +69,19 @@ jobs:
           # Windowsの静的リンク用フラグなどを適用
           RUSTFLAGS: ${{ matrix.rustflags }}
 
-      # ビルド成果物をリネーム（アップロード用に分かりやすい名前にする）
-      - name: Rename binary (Windows)
+      - name: Prepare artifact (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item -Path "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" -Destination "${{ matrix.asset_name }}"
+          Copy-Item -Path "target\${{ matrix.target }}\release\${{ matrix.artifact_name }}" -Destination "${{ matrix.asset_name }}"
 
-      - name: Rename binary (Linux/macOS)
+      - name: Prepare artifact (Linux/macOS)
         if: runner.os != 'Windows'
         shell: bash
         run: |
+          set -euo pipefail
           cp "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" "${{ matrix.asset_name }}"
+          chmod +x "${{ matrix.asset_name }}"
 
       # アーティファクトとしてアップロード
       - name: Upload artifact

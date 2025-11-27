@@ -20,18 +20,26 @@ cd Looker
 cargo build --release
 ```
 
-Windowsでは `target/release/Looker.exe`、macOS/Linuxでは `target/release/Looker` が実行ファイルです。
+ビルド後は生成された単一バイナリ（`target/release/Looker` もしくは `target/release/Looker.exe`）を任意の場所に置くだけで動作します。GitHub Release にも各プラットフォーム向けの実行ファイルがそのまま添付されるため、展開後に実行権限を付けて即利用できます。
 
 ## 使い方
 
 ### 1. ドライランで計画を確認
 
-```bash
-# 既定ではカレントディレクトリ直下の 0_inbox/record を解析
-looker
+```powershell
+# Windows (PowerShell または CMD)
+.\target\release\Looker.exe
+```
 
-# ドライブ直下をルートとして解析し、screen capture のみ表示
-looker --root D:\ --record-type screen-capture
+```bash
+# macOS / Linux
+./target/release/Looker
+```
+
+例: ドライブ直下を解析し、screen capture のみ表示
+
+```bash
+./target/release/Looker --root D:\ --record-type screen-capture
 ```
 
 出力例:
@@ -51,10 +59,13 @@ Recordフォルダ: D:\0_inbox\record
 
 ```bash
 # 確認付きで適用
-looker --root D:\ --apply
+./target/release/Looker --root D:\ --apply
 
 # CI等、確認なしで適用する場合
-looker --root D:\ --apply --yes
+./target/release/Looker --root D:\ --apply --yes
+
+# WSL など別OSから呼ぶ場合
+./target/release/Looker --root /mnt/d --apply
 ```
 
 ### 主なオプション

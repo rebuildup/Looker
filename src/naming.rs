@@ -4,11 +4,14 @@ use regex::Regex;
 pub struct NamingRule;
 
 impl NamingRule {
-    /// recordファイル向けルール:
-    /// YYYYMMDDHHMMSS_[screen-capture|screen-record|voice-record].[extension]
+    /// record ファイルの想定フォーマット:
+    /// YYYYMMDDHHMMSS_[screen-capture|screen-record|voice-record][-N].[extension]
     pub fn check_record_naming(filename: &str) -> bool {
-        let pattern = r"^\d{14}_(screen-capture|screen-record|voice-record)\.[^.]+$";
+        // 末尾に -2, -3 ... のような重複回避用サフィックスが付くことを許容する
+        let pattern =
+            r"^\d{14}_(screen-capture|screen-record|voice-record)(-\d+)?\.[^.]+$";
         let re = Regex::new(pattern).unwrap();
         re.is_match(filename)
     }
 }
+

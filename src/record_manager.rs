@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{Datelike, Local};
 
 use crate::naming::NamingRule;
 use crate::scanner::{DriveScanner, FileInfo};
 
-/// recordフォルダの整理ロジック
+/// Record フォルダを整理するメインロジック
 pub struct RecordManager;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,7 +110,7 @@ impl RecordManager {
         RecordType::VoiceRecord,
     ];
 
-    /// recordフォルダを走査して必要なアクションをプランニングする
+    /// Record フォルダを走査して必要なアクションを組み立てる
     pub fn plan(record_root: &Path, options: &RecordOptions) -> Result<RecordOrganizationPlan> {
         let mut plan = RecordOrganizationPlan::new(record_root.to_path_buf());
 
@@ -118,6 +118,9 @@ impl RecordManager {
             plan.register_folder(record_root);
             return Ok(plan);
         }
+
+        // これから作成するターゲットパスをすべて記録し、重複しないようにする
+        let mut planned_targets: BTreeSet<PathBuf> = BTreeSet::new();
 
         // 1. record_root 直下のファイルを整理
         let root_files = Self::scan_record_folder(record_root)?;
@@ -135,13 +138,14 @@ impl RecordManager {
             plan.register_folder(&target_folder);
 
             let needs_rename = !NamingRule::check_record_naming(&file.name);
-            let target_filename = if needs_rename {
+            let base_filename = if needs_rename {
                 Self::generate_record_filename(&file, &record_type)?
             } else {
                 file.name.clone()
             };
 
-            let target_path = target_folder.join(target_filename);
+            let target_path =
+                Self::unique_target_path(&target_folder, &base_filename, &mut planned_targets)?;
             if file.path == target_path {
                 continue;
             }
@@ -157,7 +161,7 @@ impl RecordManager {
             });
         }
 
-        // 2. 各 record タイプの直下ファイルを整理
+        // 2. 各 record 種別の直下ファイルを整理
         for record_type in Self::RECORD_TYPES {
             if !options.includes(&record_type) {
                 continue;
@@ -177,13 +181,14 @@ impl RecordManager {
                     Self::determine_target_folder(&file, &record_path, &record_type)?;
                 plan.register_folder(&target_folder);
 
-                let target_filename = if needs_rename {
+                let base_filename = if needs_rename {
                     Self::generate_record_filename(&file, &record_type)?
                 } else {
                     file.name.clone()
                 };
 
-                let target_path = target_folder.join(target_filename);
+                let target_path =
+                    Self::unique_target_path(&target_folder, &base_filename, &mut planned_targets)?;
                 if file.path == target_path {
                     continue;
                 }
@@ -200,9 +205,10 @@ impl RecordManager {
             }
         }
 
-        // 3. 誤配置ファイルや規定外サブフォルダ配下を整理
+        // 3. 誤配置ファイルと規定外サブフォルダ配下を整理
         if options.check_misplaced {
-            let misplaced = Self::check_misplaced_files(record_root, options)?;
+            let misplaced =
+                Self::check_misplaced_files(record_root, options, &mut planned_targets)?;
             for action in &misplaced {
                 if let Some(parent) = action.target.parent() {
                     plan.register_folder(parent);
@@ -211,7 +217,7 @@ impl RecordManager {
             plan.actions.extend(misplaced);
         }
 
-        // 4. 安全のため、ソースとターゲットでソート
+        // 4. 見やすさのためソート
         plan.actions
             .sort_by(|a, b| a.source.cmp(&b.source).then(a.target.cmp(&b.target)));
 
@@ -220,22 +226,22 @@ impl RecordManager {
 
     /// プラン済みアクションを適用
     pub fn apply(plan: &RecordOrganizationPlan) -> Result<()> {
-        // 1. ターゲットの重複・既存ファイルを事前チェック（上書きを防ぐ）
+        // 1. 最終防衛線: ターゲット重複と既存ファイルへの上書きを検査
         let mut seen_targets = BTreeSet::new();
         for action in &plan.actions {
             if !seen_targets.insert(action.target.clone()) {
-                anyhow::bail!(
+                return Err(anyhow!(
                     "実行予定のターゲットパスが重複しています: {:?}",
                     action.target
-                );
+                ));
             }
 
             if action.target.exists() {
-                anyhow::bail!(
+                return Err(anyhow!(
                     "既存のファイルへ適用しようとしました: {:?} -> {:?}",
                     action.source,
                     action.target
-                );
+                ));
             }
         }
 
@@ -245,7 +251,7 @@ impl RecordManager {
                 .with_context(|| format!("フォルダ作成に失敗: {:?}", folder))?;
         }
 
-        // 3. アクションの適用
+        // 3. アクションを順に適用
         for action in &plan.actions {
             if let Some(parent) = action.target.parent()
                 && !parent.exists()
@@ -272,17 +278,17 @@ impl RecordManager {
     fn check_misplaced_files(
         record_base: &Path,
         options: &RecordOptions,
+        planned_targets: &mut BTreeSet<PathBuf>,
     ) -> Result<Vec<RecordFileAction>> {
         let mut actions = Vec::new();
 
-        // 1. 各 record タイプ配下を再帰的にチェック
+        // 1. 各 record 種別配下を再帰的にチェック
         for record_type in Self::RECORD_TYPES {
             if !options.includes(&record_type) {
                 continue;
             }
 
             let record_path = record_base.join(record_type.folder_name());
-
             if !record_path.exists() {
                 continue;
             }
@@ -291,7 +297,6 @@ impl RecordManager {
 
             for file in all_files {
                 let correct_type = Self::guess_record_type(&file.path);
-
                 if !options.includes(&correct_type) {
                     continue;
                 }
@@ -318,13 +323,14 @@ impl RecordManager {
                 let target_folder =
                     Self::determine_target_folder(&file, &target_record_path, &correct_type)?;
 
-                let target_filename = if needs_rename {
+                let base_filename = if needs_rename {
                     Self::generate_record_filename(&file, &correct_type)?
                 } else {
                     file.name.clone()
                 };
 
-                let target_path = target_folder.join(target_filename);
+                let target_path =
+                    Self::unique_target_path(&target_folder, &base_filename, planned_targets)?;
                 if file.path == target_path {
                     continue;
                 }
@@ -379,8 +385,7 @@ impl RecordManager {
                     continue;
                 }
 
-                let target_record_path =
-                    record_base.join(correct_type.folder_name());
+                let target_record_path = record_base.join(correct_type.folder_name());
                 let target_folder =
                     Self::determine_target_folder(&file, &target_record_path, &correct_type)?;
 
@@ -391,13 +396,14 @@ impl RecordManager {
                 let needs_rename =
                     needs_fix_name || !NamingRule::check_record_naming(&file.name);
 
-                let target_filename = if needs_rename {
+                let base_filename = if needs_rename {
                     Self::generate_record_filename(&file, &correct_type)?
                 } else {
                     file.name.clone()
                 };
 
-                let target_path = target_folder.join(target_filename);
+                let target_path =
+                    Self::unique_target_path(&target_folder, &base_filename, planned_targets)?;
                 if file.path == target_path {
                     continue;
                 }
@@ -423,7 +429,7 @@ impl RecordManager {
         Ok(all_files.into_iter().filter(|info| !info.is_dir).collect())
     }
 
-    /// record配下の直下ファイルのみ取得
+    /// 指定フォルダ直下のファイルのみ取得
     fn scan_record_folder(record_path: &Path) -> Result<Vec<FileInfo>> {
         let mut files = Vec::new();
         let entries = fs::read_dir(record_path)
@@ -470,7 +476,7 @@ impl RecordManager {
         Ok(files)
     }
 
-    /// 拡張子などから record 種別を推定
+    /// 拡張子やファイル名から record 種別を推定
     fn guess_record_type(file_path: &Path) -> RecordType {
         let extension = file_path
             .extension()
@@ -504,7 +510,7 @@ impl RecordManager {
         } else if file_name.contains("voice-record") || file_name.contains("voice") {
             RecordType::VoiceRecord
         } else {
-            // 不明な場合は screen capture とみなす（従来仕様を踏襲）
+            // 不明な場合は screen capture とみなす（元の仕様を踏襲）
             RecordType::ScreenCapture
         }
     }
@@ -530,20 +536,30 @@ impl RecordManager {
         }
     }
 
-    /// ファイル名から prefix を抽出
+    /// ファイル名から prefix（screen-capture 等）を抽出
+    /// 末尾の -2, -3 などのサフィックスは無視する
     fn extract_naming_prefix(filename: &str) -> String {
         let parts: Vec<&str> = filename.split('_').collect();
         if parts.len() >= 2 {
             let prefix_with_ext = parts[1];
-            if let Some(dot_pos) = prefix_with_ext.rfind('.') {
-                return prefix_with_ext[..dot_pos].to_string();
+            let mut prefix = if let Some(dot_pos) = prefix_with_ext.rfind('.') {
+                prefix_with_ext[..dot_pos].to_string()
+            } else {
+                prefix_with_ext.to_string()
+            };
+
+            if let Some((head, tail)) = prefix.rsplit_once('-') {
+                if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+                    prefix = head.to_string();
+                }
             }
-            return prefix_with_ext.to_string();
+
+            return prefix;
         }
         String::new()
     }
 
-    /// recordファイル名を生成
+    /// record ファイル名を生成（サフィックスなしのベース名）
     fn generate_record_filename(file: &FileInfo, record_type: &RecordType) -> Result<String> {
         let extension = file.extension.clone();
         let timestamp = file.modified.format("%Y%m%d%H%M%S").to_string();
@@ -556,6 +572,48 @@ impl RecordManager {
                 record_type.naming_prefix(),
                 extension
             ))
+        }
+    }
+
+    /// 同じフォルダ内で一意になるターゲットパスを決定する
+    ///
+    /// - ベース名で空いていればそのまま使う
+    /// - 既に存在していれば `-2`, `-3`, ... のように番号を振って空き名を探す
+    fn unique_target_path(
+        target_folder: &Path,
+        base_filename: &str,
+        planned_targets: &mut BTreeSet<PathBuf>,
+    ) -> Result<PathBuf> {
+        // まずはベース名のまま試す
+        let mut candidate = target_folder.join(base_filename);
+        if !planned_targets.contains(&candidate) && !candidate.exists() {
+            planned_targets.insert(candidate.clone());
+            return Ok(candidate);
+        }
+
+        // ベース名を {stem}.{ext} に分割
+        let (stem, ext) = match base_filename.rsplit_once('.') {
+            Some((s, e)) => (s.to_string(), Some(e.to_string())),
+            None => (base_filename.to_string(), None),
+        };
+
+        // 2 から番号を振って空き名を探す
+        let mut index: u32 = 2;
+        loop {
+            let new_name = match &ext {
+                Some(ext) => format!("{stem}-{index}.{ext}"),
+                None => format!("{stem}-{index}"),
+            };
+            candidate = target_folder.join(&new_name);
+
+            if !planned_targets.contains(&candidate) && !candidate.exists() {
+                planned_targets.insert(candidate.clone());
+                return Ok(candidate);
+            }
+
+            index = index
+                .checked_add(1)
+                .ok_or_else(|| anyhow!("重複回避用の連番生成に失敗しました"))?;
         }
     }
 

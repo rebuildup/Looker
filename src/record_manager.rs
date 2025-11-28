@@ -34,20 +34,6 @@ impl RecordType {
             RecordType::VoiceRecord => "voice-record",
         }
     }
-
-    #[allow(dead_code)]
-    pub fn from_path(path: &Path) -> Option<Self> {
-        let path_str = path.to_string_lossy().to_lowercase();
-        if path_str.contains("screen capture") || path_str.contains("screen-capture") {
-            Some(RecordType::ScreenCapture)
-        } else if path_str.contains("screen record") || path_str.contains("screen-record") {
-            Some(RecordType::ScreenRecord)
-        } else if path_str.contains("voice record") || path_str.contains("voice-record") {
-            Some(RecordType::VoiceRecord)
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +53,11 @@ impl Default for RecordOptions {
 
 impl RecordOptions {
     pub fn includes(&self, record_type: &RecordType) -> bool {
-        self.target_types.is_empty() || self.target_types.iter().any(|target| target == record_type)
+        self.target_types.is_empty()
+            || self
+                .target_types
+                .iter()
+                .any(|target| target == record_type)
     }
 }
 
@@ -114,7 +104,13 @@ impl RecordOrganizationPlan {
 }
 
 impl RecordManager {
-    /// recordフォルダを走査して必要なアクションを計画する
+    const RECORD_TYPES: [RecordType; 3] = [
+        RecordType::ScreenCapture,
+        RecordType::ScreenRecord,
+        RecordType::VoiceRecord,
+    ];
+
+    /// recordフォルダを走査して必要なアクションをプランニングする
     pub fn plan(record_root: &Path, options: &RecordOptions) -> Result<RecordOrganizationPlan> {
         let mut plan = RecordOrganizationPlan::new(record_root.to_path_buf());
 
@@ -123,6 +119,7 @@ impl RecordManager {
             return Ok(plan);
         }
 
+        // 1. record_root 直下のファイルを整理
         let root_files = Self::scan_record_folder(record_root)?;
         for file in root_files {
             let record_type = Self::guess_record_type(&file.path);
@@ -133,7 +130,8 @@ impl RecordManager {
             let record_path = record_root.join(record_type.folder_name());
             plan.register_folder(&record_path);
 
-            let target_folder = Self::determine_target_folder(&file, &record_path, &record_type)?;
+            let target_folder =
+                Self::determine_target_folder(&file, &record_path, &record_type)?;
             plan.register_folder(&target_folder);
 
             let needs_rename = !NamingRule::check_record_naming(&file.name);
@@ -159,11 +157,8 @@ impl RecordManager {
             });
         }
 
-        for record_type in [
-            RecordType::ScreenCapture,
-            RecordType::ScreenRecord,
-            RecordType::VoiceRecord,
-        ] {
+        // 2. 各 record タイプの直下ファイルを整理
+        for record_type in Self::RECORD_TYPES {
             if !options.includes(&record_type) {
                 continue;
             }
@@ -189,7 +184,6 @@ impl RecordManager {
                 };
 
                 let target_path = target_folder.join(target_filename);
-
                 if file.path == target_path {
                     continue;
                 }
@@ -206,6 +200,7 @@ impl RecordManager {
             }
         }
 
+        // 3. 誤配置ファイルや規定外サブフォルダ配下を整理
         if options.check_misplaced {
             let misplaced = Self::check_misplaced_files(record_root, options)?;
             for action in &misplaced {
@@ -216,19 +211,41 @@ impl RecordManager {
             plan.actions.extend(misplaced);
         }
 
+        // 4. 安全のため、ソースとターゲットでソート
         plan.actions
             .sort_by(|a, b| a.source.cmp(&b.source).then(a.target.cmp(&b.target)));
 
         Ok(plan)
     }
 
-    /// 計画済みアクションを適用
+    /// プラン済みアクションを適用
     pub fn apply(plan: &RecordOrganizationPlan) -> Result<()> {
+        // 1. ターゲットの重複・既存ファイルを事前チェック（上書きを防ぐ）
+        let mut seen_targets = BTreeSet::new();
+        for action in &plan.actions {
+            if !seen_targets.insert(action.target.clone()) {
+                anyhow::bail!(
+                    "実行予定のターゲットパスが重複しています: {:?}",
+                    action.target
+                );
+            }
+
+            if action.target.exists() {
+                anyhow::bail!(
+                    "既存のファイルへ適用しようとしました: {:?} -> {:?}",
+                    action.source,
+                    action.target
+                );
+            }
+        }
+
+        // 2. 必要なフォルダ作成
         for folder in &plan.required_folders {
             fs::create_dir_all(folder)
                 .with_context(|| format!("フォルダ作成に失敗: {:?}", folder))?;
         }
 
+        // 3. アクションの適用
         for action in &plan.actions {
             if let Some(parent) = action.target.parent()
                 && !parent.exists()
@@ -239,27 +256,27 @@ impl RecordManager {
 
             fs::rename(&action.source, &action.target).with_context(|| {
                 format!(
-                    "ファイル操作に失敗: {:?} -> {:?}",
+                    "ファイル移動に失敗: {:?} -> {:?}",
                     action.source, action.target
                 )
             })?;
         }
 
+        // 4. 規定外サブフォルダで空になったものを片付ける
+        Self::cleanup_non_standard_empty_dirs(&plan.record_root)?;
+
         Ok(())
     }
 
-    /// 取り違えファイルのチェック
+    /// 誤配置ファイル・規定外フォルダ配下のファイルを検出
     fn check_misplaced_files(
         record_base: &Path,
         options: &RecordOptions,
     ) -> Result<Vec<RecordFileAction>> {
         let mut actions = Vec::new();
 
-        for record_type in [
-            RecordType::ScreenCapture,
-            RecordType::ScreenRecord,
-            RecordType::VoiceRecord,
-        ] {
+        // 1. 各 record タイプ配下を再帰的にチェック
+        for record_type in Self::RECORD_TYPES {
             if !options.includes(&record_type) {
                 continue;
             }
@@ -281,9 +298,12 @@ impl RecordManager {
 
                 let current_prefix = Self::extract_naming_prefix(&file.name);
                 let correct_prefix = correct_type.naming_prefix();
+
                 let needs_move = record_type != correct_type;
-                let needs_fix_name = !current_prefix.is_empty() && current_prefix != correct_prefix;
-                let needs_rename = needs_fix_name || !NamingRule::check_record_naming(&file.name);
+                let needs_fix_name =
+                    !current_prefix.is_empty() && current_prefix != correct_prefix;
+                let needs_rename =
+                    needs_fix_name || !NamingRule::check_record_naming(&file.name);
 
                 if !needs_move && !needs_rename {
                     continue;
@@ -305,7 +325,6 @@ impl RecordManager {
                 };
 
                 let target_path = target_folder.join(target_filename);
-
                 if file.path == target_path {
                     continue;
                 }
@@ -324,29 +343,100 @@ impl RecordManager {
             }
         }
 
-        Ok(actions)
-    }
-
-    /// 再帰的にファイルを取得
-    fn scan_all_files_recursive(record_path: &Path) -> Result<Vec<FileInfo>> {
-        let all_files = DriveScanner::scan(record_path)?;
-        Ok(all_files.into_iter().filter(|f| !f.is_dir).collect())
-    }
-
-    /// record配下の直下ファイルのみを取得
-    fn scan_record_folder(record_path: &Path) -> Result<Vec<FileInfo>> {
-        let mut files = Vec::new();
-        let entries = fs::read_dir(record_path)
-            .with_context(|| format!("ディレクトリの読込に失敗: {:?}", record_path))?;
+        // 2. record_root 直下の「規定外サブフォルダ」配下を整理
+        let entries = fs::read_dir(record_base)
+            .with_context(|| format!("record ルートの走査に失敗: {:?}", record_base))?;
 
         for entry in entries {
             let entry = match entry {
-                Ok(e) => e,
+                Ok(entry) => entry,
                 Err(_) => continue,
             };
 
             let metadata = match entry.metadata() {
-                Ok(m) => m,
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+
+            if !metadata.is_dir() {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_standard = Self::RECORD_TYPES
+                .iter()
+                .any(|kind| kind.folder_name() == name);
+            if is_standard {
+                continue;
+            }
+
+            let sub_root = entry.path();
+            let sub_files = Self::scan_all_files_recursive(&sub_root)?;
+
+            for file in sub_files {
+                let correct_type = Self::guess_record_type(&file.path);
+                if !options.includes(&correct_type) {
+                    continue;
+                }
+
+                let target_record_path =
+                    record_base.join(correct_type.folder_name());
+                let target_folder =
+                    Self::determine_target_folder(&file, &target_record_path, &correct_type)?;
+
+                let current_prefix = Self::extract_naming_prefix(&file.name);
+                let correct_prefix = correct_type.naming_prefix();
+                let needs_fix_name =
+                    !current_prefix.is_empty() && current_prefix != correct_prefix;
+                let needs_rename =
+                    needs_fix_name || !NamingRule::check_record_naming(&file.name);
+
+                let target_filename = if needs_rename {
+                    Self::generate_record_filename(&file, &correct_type)?
+                } else {
+                    file.name.clone()
+                };
+
+                let target_path = target_folder.join(target_filename);
+                if file.path == target_path {
+                    continue;
+                }
+
+                actions.push(RecordFileAction {
+                    source: file.path.clone(),
+                    target: target_path,
+                    action_type: if needs_rename {
+                        ActionType::Rename
+                    } else {
+                        ActionType::MoveToCorrectLocation
+                    },
+                });
+            }
+        }
+
+        Ok(actions)
+    }
+
+    /// 再帰的にファイルのみ取得
+    fn scan_all_files_recursive(record_path: &Path) -> Result<Vec<FileInfo>> {
+        let all_files = DriveScanner::scan(record_path)?;
+        Ok(all_files.into_iter().filter(|info| !info.is_dir).collect())
+    }
+
+    /// record配下の直下ファイルのみ取得
+    fn scan_record_folder(record_path: &Path) -> Result<Vec<FileInfo>> {
+        let mut files = Vec::new();
+        let entries = fs::read_dir(record_path)
+            .with_context(|| format!("ディレクトリの読み取りに失敗: {:?}", record_path))?;
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
                 Err(_) => continue,
             };
 
@@ -358,7 +448,7 @@ impl RecordManager {
             let name = entry.file_name().to_string_lossy().to_string();
             let extension = path
                 .extension()
-                .and_then(|e| e.to_str())
+                .and_then(|ext| ext.to_str())
                 .unwrap_or("")
                 .to_lowercase();
 
@@ -376,14 +466,15 @@ impl RecordManager {
                 is_dir: false,
             });
         }
+
         Ok(files)
     }
 
-    /// ファイル拡張子などからrecord種別を推定
+    /// 拡張子などから record 種別を推定
     fn guess_record_type(file_path: &Path) -> RecordType {
         let extension = file_path
             .extension()
-            .and_then(|e| e.to_str())
+            .and_then(|ext| ext.to_str())
             .unwrap_or("")
             .to_lowercase();
 
@@ -402,7 +493,7 @@ impl RecordManager {
 
         let file_name = file_path
             .file_name()
-            .and_then(|n| n.to_str())
+            .and_then(|name| name.to_str())
             .unwrap_or("")
             .to_lowercase();
 
@@ -413,11 +504,12 @@ impl RecordManager {
         } else if file_name.contains("voice-record") || file_name.contains("voice") {
             RecordType::VoiceRecord
         } else {
+            // 不明な場合は screen capture とみなす（従来仕様を踏襲）
             RecordType::ScreenCapture
         }
     }
 
-    /// ファイルの更新日時から配置先フォルダを決定
+    /// 更新日時から年/月フォルダを決定
     fn determine_target_folder(
         file: &FileInfo,
         record_path: &Path,
@@ -438,7 +530,7 @@ impl RecordManager {
         }
     }
 
-    /// 既存ファイル名から prefix を抽出
+    /// ファイル名から prefix を抽出
     fn extract_naming_prefix(filename: &str) -> String {
         let parts: Vec<&str> = filename.split('_').collect();
         if parts.len() >= 2 {
@@ -466,4 +558,89 @@ impl RecordManager {
             ))
         }
     }
+
+    /// record_root 直下の規定外サブフォルダで、空になったものを削除
+    fn cleanup_non_standard_empty_dirs(record_root: &Path) -> Result<()> {
+        let entries = match fs::read_dir(record_root) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(()),
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+
+            if !metadata.is_dir() {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_standard = Self::RECORD_TYPES
+                .iter()
+                .any(|kind| kind.folder_name() == name);
+            if is_standard {
+                continue;
+            }
+
+            let path = entry.path();
+            // 中身が空（サブディレクトリも空）であれば削除する
+            let _ = Self::remove_empty_dirs_recursive(&path)?;
+        }
+
+        Ok(())
+    }
+
+    /// 空のディレクトリツリーなら再帰的に削除する
+    fn remove_empty_dirs_recursive(path: &Path) -> Result<bool> {
+        let entries = match fs::read_dir(path) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(false),
+        };
+
+        let mut is_empty = true;
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    is_empty = false;
+                    continue;
+                }
+            };
+
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    is_empty = false;
+                    continue;
+                }
+            };
+
+            if metadata.is_dir() {
+                let child_empty = Self::remove_empty_dirs_recursive(&entry.path())?;
+                if !child_empty {
+                    is_empty = false;
+                }
+            } else {
+                // ファイルが残っているので空ではない
+                is_empty = false;
+            }
+        }
+
+        if is_empty {
+            fs::remove_dir(path)
+                .with_context(|| format!("空ディレクトリの削除に失敗: {:?}", path))?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
+

@@ -225,73 +225,141 @@ impl RecordManager {
     }
 
     /// プラン済みアクションを適用
+    ///
+    /// 可能な限り処理を継続し、失敗しても最後にサマリを表示します。
     pub fn apply(plan: &RecordOrganizationPlan) -> Result<()> {
         use crate::ui::UI;
 
-        // 1. 最終防衛線: ターゲット重複と既存ファイルへの上書きを検査
+        // サマリ用カウンタ
+        let folders_total = plan.required_folders.len();
+        let mut folders_created_ok = 0usize;
+        let mut folders_created_err = 0usize;
+
+        let actions_total = plan.actions.len();
+        let mut actions_applied_ok = 0usize;
+        let mut actions_skipped_conflict = 0usize; // 既存ファイルなどでスキップ
+        let mut actions_failed_err = 0usize;
+
+        // 1. 最終防衛線: ターゲット重複を検査（重複はスキップ対象にする）
         let mut seen_targets = BTreeSet::new();
+        let mut effective_actions: Vec<&RecordFileAction> = Vec::new();
         for action in &plan.actions {
             if !seen_targets.insert(action.target.clone()) {
-                return Err(anyhow!(
-                    "実行予定のターゲットパスが重複しています: {:?}",
-                    action.target
+                UI::warning(&format!(
+                    "ターゲット重複のためスキップ: {}",
+                    action.target.display()
                 ));
+                actions_skipped_conflict += 1;
+                continue;
             }
 
             if action.target.exists() {
-                return Err(anyhow!(
-                    "既存のファイルへ適用しようとしました: {:?} -> {:?}",
-                    action.source,
-                    action.target
+                UI::warning(&format!(
+                    "既存ファイルがあるためスキップ: {} -> {}",
+                    action.source.display(),
+                    action.target.display()
                 ));
+                actions_skipped_conflict += 1;
+                continue;
             }
+
+            effective_actions.push(action);
         }
 
-        // 2. 必要なフォルダ作成
-        let folder_count = plan.required_folders.len();
-        if folder_count > 0 {
-            UI::info(&format!("フォルダを作成中... ({} 件)", folder_count));
+        // 2. 必要なフォルダ作成（失敗しても続行）
+        if folders_total > 0 {
+            UI::info(&format!("フォルダを作成中... ({} 件)", folders_total));
         }
         for (idx, folder) in plan.required_folders.iter().enumerate() {
-            fs::create_dir_all(folder)
-                .with_context(|| format!("フォルダ作成に失敗: {:?}", folder))?;
-            UI::info(&format!("  [{}/{}] 作成: {}", idx + 1, folder_count, folder.display()));
+            match fs::create_dir_all(folder) {
+                Ok(_) => {
+                    folders_created_ok += 1;
+                    UI::info(&format!(
+                        "  [{}/{}] 作成: {}",
+                        idx + 1,
+                        folders_total,
+                        folder.display()
+                    ));
+                }
+                Err(e) => {
+                    folders_created_err += 1;
+                    UI::warning(&format!(
+                        "  [{}/{}] 作成失敗: {} ({})",
+                        idx + 1,
+                        folders_total,
+                        folder.display(),
+                        e
+                    ));
+                }
+            }
         }
 
-        // 3. アクションを順に適用
-        let action_count = plan.actions.len();
-        if action_count > 0 {
-            UI::info(&format!("\nファイルを移動中... ({} 件)", action_count));
+        // 3. アクションを順に適用（失敗しても続行）
+        if actions_total > 0 {
+            UI::info(&format!("\nファイルを移動中... ({} 件)", actions_total));
         }
-        for (idx, action) in plan.actions.iter().enumerate() {
-            if let Some(parent) = action.target.parent()
-                && !parent.exists()
-            {
-                fs::create_dir_all(parent)
-                    .with_context(|| format!("フォルダ作成に失敗: {:?}", parent))?;
+        for (idx, action) in effective_actions.iter().enumerate() {
+            if let Some(parent) = action.target.parent() {
+                if !parent.exists() {
+                    if let Err(e) = fs::create_dir_all(parent) {
+                        actions_failed_err += 1;
+                        UI::warning(&format!(
+                            "  [{}] 親フォルダ作成失敗: {} ({})",
+                            idx + 1,
+                            parent.display(),
+                            e
+                        ));
+                        // 親フォルダが作れないと移動できないので次へ
+                        continue;
+                    }
+                }
             }
 
-            fs::rename(&action.source, &action.target).with_context(|| {
-                format!(
-                    "ファイル移動に失敗: {:?} -> {:?}",
-                    action.source, action.target
-                )
-            })?;
-            
-            UI::info(&format!(
-                "  [{}/{}] {} -> {}",
-                idx + 1,
-                action_count,
-                action.source.file_name().unwrap_or_default().to_string_lossy(),
-                action.target.display()
-            ));
+            match fs::rename(&action.source, &action.target) {
+                Ok(_) => {
+                    actions_applied_ok += 1;
+                    UI::info(&format!(
+                        "  [{}/{}] {} -> {}",
+                        actions_applied_ok + actions_failed_err + actions_skipped_conflict,
+                        actions_total,
+                        action.source.display(),
+                        action.target.display()
+                    ));
+                }
+                Err(e) => {
+                    actions_failed_err += 1;
+                    UI::warning(&format!(
+                        "  [{}/{}] 失敗: {} -> {} ({})",
+                        actions_applied_ok + actions_failed_err + actions_skipped_conflict,
+                        actions_total,
+                        action.source.display(),
+                        action.target.display(),
+                        e
+                    ));
+                }
+            }
         }
 
-        // 4. 規定外サブフォルダで空になったものを片付ける
+        // 4. 規定外サブフォルダで空になったものを片付ける（失敗しても続行）
         UI::info("\n空フォルダをクリーンアップ中...");
-        Self::cleanup_non_standard_empty_dirs(&plan.record_root)?;
+        if let Err(e) = Self::cleanup_non_standard_empty_dirs(&plan.record_root) {
+            UI::warning(&format!("空フォルダのクリーンアップに失敗: {}", e));
+        }
 
+        // 5. サマリ表示（必ず最後に出す）
+        UI::separator();
+        UI::success(&format!(
+            "処理サマリ: フォルダ {} 作成 (成功 {} / 失敗 {}), ファイル操作 {} 件 (成功 {} / 競合スキップ {} / 失敗 {})",
+            folders_total,
+            folders_created_ok,
+            folders_created_err,
+            actions_total,
+            actions_applied_ok,
+            actions_skipped_conflict,
+            actions_failed_err
+        ));
         UI::success("\nすべての処理が完了しました。");
+
         Ok(())
     }
 

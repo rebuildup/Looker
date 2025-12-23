@@ -68,6 +68,14 @@ impl UI {
         pb
     }
 
+    pub fn wait_for_enter(message: &str) {
+        use std::io::{self, Write};
+        println!("{}", message.bright_black());
+        let _ = io::stdout().flush();
+        let mut buf = String::new();
+        let _ = io::stdin().read_line(&mut buf);
+    }
+
     pub fn render_plan_summary(plan: &RecordOrganizationPlan, verbose: bool) {
         println!(
             "{} {}",

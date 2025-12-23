@@ -190,20 +190,17 @@ fn handle_organize_records() -> Result<()> {
 
     if plan.is_empty() {
         UI::success("変更は不要です。");
-        println!("\nメニューに戻ります...");
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        UI::wait_for_enter("\nEnterでメニューに戻ります...");
         return Ok(());
     }
 
     if Menu::confirm_execution(plan.actions.len())? {
         UI::section("変更を適用中");
         RecordManager::apply(&plan)?;
-        println!("\n処理が完了しました。メニューに戻ります...");
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        UI::wait_for_enter("\n処理が完了しました。Enterでメニューに戻ります...");
     } else {
         UI::warning("適用をキャンセルしました。");
-        println!("\nメニューに戻ります...");
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        UI::wait_for_enter("\nEnterでメニューに戻ります...");
     }
 
     Ok(())
@@ -218,8 +215,7 @@ fn handle_create_gallery_shortcuts() -> Result<()> {
     
     GalleryManager::create_shortcuts(&root)?;
     
-    println!("\n処理が完了しました。メニューに戻ります...");
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    UI::wait_for_enter("\n処理が完了しました。Enterでメニューに戻ります...");
     Ok(())
 }
 
@@ -231,8 +227,7 @@ fn handle_ensure_structure() -> Result<()> {
     
     StructureManager::ensure_standard_structure(&root)?;
     
-    println!("\n処理が完了しました。メニューに戻ります...");
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    UI::wait_for_enter("\n処理が完了しました。Enterでメニューに戻ります...");
     Ok(())
 }
 

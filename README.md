@@ -186,13 +186,13 @@ root/
 │ ├ downloads/
 │ └ record/
 │   ├ screen capture/
-│   │ ├ YYYY/YYYYMM/ #去年以前
+│   │ ├ YYYY/YYYYMM/ #昨年以前
 │   │ └ YYYYMM/ #今年
 │   ├ screen record/
-│   │ ├ YYYY/YYYYMM/ #去年以前
+│   │ ├ YYYY/YYYYMM/ #昨年以前
 │   │ └ YYYYMM/ #今年
 │   └ voice record/
-│     ├ YYYY/YYYYMM/ #去年以前
+│     ├ YYYY/YYYYMM/ #昨年以前
 │     └ YYYYMM/ #今年
 ├ 1_projects/[category]/[project]/ #プロジェクト単位でアクセスする前提のファイル
 ├ 2_assets/    #メディアファイル

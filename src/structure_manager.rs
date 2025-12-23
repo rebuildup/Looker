@@ -30,7 +30,7 @@ impl StructureManager {
             "3_docs/profile",
             "3_docs/collection",
             "3_docs/class",
-            "3_docs/club",
+            "3_docs/cclub",
             "3_docs/guide",
             "3_docs/family",
             "3_docs/icon",

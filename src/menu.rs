@@ -8,6 +8,8 @@ use crate::record_manager::RecordOptions;
 #[derive(Clone, Copy)]
 pub enum MenuAction {
     OrganizeNow,
+    CreateGalleryShortcuts,
+    EnsureStructure,
     Exit,
 }
 
@@ -29,8 +31,16 @@ impl Menu {
     pub fn show_main_menu() -> Result<MenuAction> {
         let choices = vec![
             MenuChoice {
-                label: "整理を実行（プレビュー後に適用）",
+                label: "Recordフォルダを整理（プレビュー後に適用）",
                 action: MenuAction::OrganizeNow,
+            },
+            MenuChoice {
+                label: "プロジェクト成果物のショートカットを作成",
+                action: MenuAction::CreateGalleryShortcuts,
+            },
+            MenuChoice {
+                label: "標準フォルダ構造を確認・作成",
+                action: MenuAction::EnsureStructure,
             },
             MenuChoice {
                 label: "終了する",

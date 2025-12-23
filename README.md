@@ -11,6 +11,9 @@ Recordフォルダ専用の整理CLIです。
 - screen/voiceなど録画種別を取り違えているファイルを再分類（`--fast` 指定時はスキップして高速化）。
 - `--record-type` で screen-capture / screen-record / voice-record のいずれかに処理対象を絞り込み。
 - `--apply` + `--yes` でノンインタラクティブに実行可能（自動整理タスク等に組み込みやすい）。
+- **ファイル操作の完了までの詳細ログを表示**（各フォルダ作成、ファイル移動の進捗を確認可能）。
+- **プロジェクト成果物のショートカット作成**（`1_projects` 配下の命名規則に従った成果物を `5_gallery` にショートカット作成）。
+- **標準フォルダ構造の確認と自動作成**（READMEに記載された標準構造に従ってフォルダを自動作成）。
 
 ## セットアップ
 
@@ -24,7 +27,9 @@ cargo build --release
 
 ## 使い方
 
-### 1. ドライランで計画を確認
+### インタラクティブメニュー（推奨）
+
+引数なしで実行すると、使いやすいメニューが表示されます。すべての機能はこのメニューから実行できます。
 
 ```powershell
 # Windows (PowerShell または CMD)
@@ -34,6 +39,35 @@ cargo build --release
 ```bash
 # macOS / Linux
 ./target/release/Looker
+```
+
+メニューから以下の機能を選択できます：
+
+1. **Recordフォルダを整理** - `0_inbox/record` 以下のファイルを自動整理
+2. **プロジェクト成果物のショートカットを作成** - `1_projects` の成果物を `5_gallery` にリンク
+3. **標準フォルダ構造を確認・作成** - 必要なフォルダを自動作成
+4. **終了する**
+
+各機能の実行後、自動的にメニューに戻ります。
+
+### CLIモード（自動化向け）
+
+コマンドライン引数を指定すると、自動化に適したCLIモードで動作します。
+
+#### 1. Recordフォルダの整理（ドライラン）
+
+#### 1. Recordフォルダの整理（ドライラン）
+
+デフォルトでは変更をプレビューするだけで、実際には適用しません。
+
+```powershell
+# Windows (PowerShell または CMD)
+.\target\release\Looker.exe --root D:\
+```
+
+```bash
+# macOS / Linux
+./target/release/Looker --root /path/to/root
 ```
 
 例: ドライブ直下を解析し、screen capture のみ表示
@@ -55,7 +89,7 @@ Recordフォルダ: D:\0_inbox\record
 --apply を指定すると上記の変更を適用できます。
 ```
 
-### 2. 変更を適用
+#### 2. Recordフォルダの整理（変更を適用）
 
 ```bash
 # 確認付きで適用
@@ -68,7 +102,23 @@ Recordフォルダ: D:\0_inbox\record
 ./target/release/Looker --root /mnt/d --apply
 ```
 
-### 主なオプション
+#### 3. プロジェクト成果物のショートカット作成
+
+```bash
+./target/release/Looker --create-shortcuts
+```
+
+#### 4. 標準フォルダ構造の確認と作成
+
+```bash
+./target/release/Looker --ensure-structure
+```
+
+### オプション一覧
+
+### オプション一覧
+
+#### Record整理用オプション
 
 | オプション | 説明 |
 | --- | --- |
@@ -79,6 +129,41 @@ Recordフォルダ: D:\0_inbox\record
 | `--apply` | 計画された変更を実行 |
 | `--yes` | 事前確認なしで `--apply` を実行（`-y` も可） |
 | `--verbose` | すべてのフォルダ作成・ファイル操作を表示（既定では最大10件までプレビュー） |
+
+#### その他の機能
+
+| オプション | 説明 |
+| --- | --- |
+| `--create-shortcuts` | プロジェクト成果物のショートカットを作成 |
+| `--ensure-structure` | 標準フォルダ構造を確認して不足フォルダを作成 |
+
+### 新機能の使い方
+
+#### プロジェクト成果物のショートカット作成
+
+`1_projects` 以下のプロジェクトフォルダから命名規則（`YYYYMMDD_projectname`）に従った成果物を探索し、`5_gallery` にショートカットを作成します。
+
+```bash
+# インタラクティブモード（推奨）
+./target/release/Looker
+# → メニューから「2. プロジェクト成果物のショートカットを作成」を選択
+
+# CLIモード
+./target/release/Looker --create-shortcuts
+```
+
+#### 標準フォルダ構造の確認と作成
+
+READMEに記載された標準フォルダ構造に従って、不足しているフォルダを自動的に作成します。
+
+```bash
+# インタラクティブモード（推奨）
+./target/release/Looker
+# → メニューから「3. 標準フォルダ構造を確認・作成」を選択
+
+# CLIモード
+./target/release/Looker --ensure-structure
+```
 
 ## Lint & QA
 
@@ -91,12 +176,56 @@ Recordフォルダ: D:\0_inbox\record
 - 1年より前のファイルは `YYYY/YYYYMM/`、当年分は `YYYYMM/` に配置
 - ファイル名: `YYYYMMDDHHMMSS_screen-capture.png` の形式
 
+## フォルダ構造の例
+
+フォルダ運用は以下のフォルダ構造に従う
+
+```
+root/
+├ 0_inbox/
+│ ├ downloads/
+│ └ record/
+│   ├ screen capture/
+│   │ ├ YYYY/YYYYMM/ #去年以前
+│   │ └ YYYYMM/ #今年
+│   ├ screen record/
+│   │ ├ YYYY/YYYYMM/ #去年以前
+│   │ └ YYYYMM/ #今年
+│   └ voice record/
+│     ├ YYYY/YYYYMM/ #去年以前
+│     └ YYYYMM/ #今年
+├ 1_projects/[category]/[project]/ #プロジェクト単位でアクセスする前提のファイル
+├ 2_assets/    #メディアファイル
+│ ├ footage/[category]/
+│ ├ graphic/[category]/
+│ ├ photo/[category]/
+│ ├ illust/[category]/
+│ ├ bgm/[category]/
+│ └ sfx/[category]/
+├ 3_docs/  #複数回アクセスする前提のファイル
+│ ├ profile/
+│ ├ collection/
+│ ├ class/
+│ ├ club/
+│ ├ guide/
+│ ├ family/
+│ ├ icon/
+│ └ meme/
+├ 4_apps/[app_name]/[app_folder]/ #アプリケーション
+├ 5_gallery/ #完成品メディアファイルをlinkファイル
+├ 9_archive/ #使用する予定の無いファイルやフォルダをzipファイル
+```
+
 ## 内部構成
 
 - `src/record_manager.rs`: フォルダ解析とアクション生成/適用ロジック
+- `src/gallery_manager.rs`: プロジェクト成果物のショートカット作成
+- `src/structure_manager.rs`: 標準フォルダ構造の管理と作成
 - `src/main.rs`: CLI本体（オプション解析とレポート表示）
+- `src/menu.rs`: インタラクティブメニューシステム
 - `src/scanner.rs`: WalkDirベースの簡易ファイルスキャナ
 - `src/naming.rs`: record向け命名ルール
+- `src/ui.rs`: ターミナルUI表示
 
 ## ライセンス
 

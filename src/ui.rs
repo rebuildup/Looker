@@ -23,6 +23,7 @@ impl UI {
             "{}",
             "Folder Orchestrator for Record workspace".bright_black()
         );
+        println!("{}", "引数なしで実行すると、インタラクティブメニューが表示されます。".bright_black());
         Self::separator();
     }
 

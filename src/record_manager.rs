@@ -226,6 +226,8 @@ impl RecordManager {
 
     /// プラン済みアクションを適用
     pub fn apply(plan: &RecordOrganizationPlan) -> Result<()> {
+        use crate::ui::UI;
+
         // 1. 最終防衛線: ターゲット重複と既存ファイルへの上書きを検査
         let mut seen_targets = BTreeSet::new();
         for action in &plan.actions {
@@ -246,13 +248,22 @@ impl RecordManager {
         }
 
         // 2. 必要なフォルダ作成
-        for folder in &plan.required_folders {
+        let folder_count = plan.required_folders.len();
+        if folder_count > 0 {
+            UI::info(&format!("フォルダを作成中... ({} 件)", folder_count));
+        }
+        for (idx, folder) in plan.required_folders.iter().enumerate() {
             fs::create_dir_all(folder)
                 .with_context(|| format!("フォルダ作成に失敗: {:?}", folder))?;
+            UI::info(&format!("  [{}/{}] 作成: {}", idx + 1, folder_count, folder.display()));
         }
 
         // 3. アクションを順に適用
-        for action in &plan.actions {
+        let action_count = plan.actions.len();
+        if action_count > 0 {
+            UI::info(&format!("\nファイルを移動中... ({} 件)", action_count));
+        }
+        for (idx, action) in plan.actions.iter().enumerate() {
             if let Some(parent) = action.target.parent()
                 && !parent.exists()
             {
@@ -266,11 +277,21 @@ impl RecordManager {
                     action.source, action.target
                 )
             })?;
+            
+            UI::info(&format!(
+                "  [{}/{}] {} -> {}",
+                idx + 1,
+                action_count,
+                action.source.file_name().unwrap_or_default().to_string_lossy(),
+                action.target.display()
+            ));
         }
 
         // 4. 規定外サブフォルダで空になったものを片付ける
+        UI::info("\n空フォルダをクリーンアップ中...");
         Self::cleanup_non_standard_empty_dirs(&plan.record_root)?;
 
+        UI::success("\nすべての処理が完了しました。");
         Ok(())
     }
 

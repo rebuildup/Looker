@@ -1,7 +1,9 @@
+mod gallery_manager;
 mod menu;
 mod naming;
 mod record_manager;
 mod scanner;
+mod structure_manager;
 mod ui;
 
 use std::io::{self, Write};
@@ -9,8 +11,10 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
+use gallery_manager::GalleryManager;
 use menu::{Menu, MenuAction};
 use record_manager::{RecordManager, RecordOptions, RecordType};
+use structure_manager::StructureManager;
 use ui::UI;
 use walkdir::WalkDir;
 
@@ -45,6 +49,14 @@ struct Cli {
     /// すべての詳細を表示する
     #[arg(long)]
     verbose: bool,
+
+    /// プロジェクト成果物のショートカットを作成
+    #[arg(long)]
+    create_shortcuts: bool,
+
+    /// 標準フォルダ構造を確認・作成
+    #[arg(long)]
+    ensure_structure: bool,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -74,7 +86,19 @@ fn main() -> Result<()> {
 fn run_cli_mode() -> Result<()> {
     let args = Cli::parse();
 
-    // 将来の拡張余地を残しつつ、デフォルトでは auto detect する
+    // ショートカット作成モード
+    if args.create_shortcuts {
+        let root = get_drive_root()?;
+        return GalleryManager::create_shortcuts(&root);
+    }
+
+    // フォルダ構造作成モード
+    if args.ensure_structure {
+        let root = get_drive_root()?;
+        return StructureManager::ensure_standard_structure(&root);
+    }
+
+    // デフォルトの record 整理モード
     let record_root = if let Some(path) = args.record_path {
         path
     } else {
@@ -111,11 +135,6 @@ fn run_cli_mode() -> Result<()> {
     }
 
     RecordManager::apply(&plan)?;
-    println!(
-        "フォルダ作成 {} 件 / ファイル操作 {} 件を適用しました。",
-        plan.required_folders.len(),
-        plan.actions.len()
-    );
 
     Ok(())
 }
@@ -130,11 +149,22 @@ fn confirm(prompt: &str) -> Result<bool> {
 }
 
 fn run_interactive_mode() -> Result<()> {
-    UI::print_title();
-
     loop {
+        // 画面をクリア（オプショナル）
+        print!("\x1B[2J\x1B[1;1H");
+        
+        UI::print_title();
+
         match Menu::show_main_menu()? {
-            MenuAction::OrganizeNow => handle_interactive_flow()?,
+            MenuAction::OrganizeNow => {
+                handle_organize_records()?;
+            }
+            MenuAction::CreateGalleryShortcuts => {
+                handle_create_gallery_shortcuts()?;
+            }
+            MenuAction::EnsureStructure => {
+                handle_ensure_structure()?;
+            }
             MenuAction::Exit => {
                 UI::info("終了します。");
                 break;
@@ -145,7 +175,7 @@ fn run_interactive_mode() -> Result<()> {
     Ok(())
 }
 
-fn handle_interactive_flow() -> Result<()> {
+fn handle_organize_records() -> Result<()> {
     let record_root = auto_detect_record_root()?;
     let options = Menu::ask_record_options()?;
 
@@ -160,19 +190,59 @@ fn handle_interactive_flow() -> Result<()> {
 
     if plan.is_empty() {
         UI::success("変更は不要です。");
+        println!("\nメニューに戻ります...");
+        std::thread::sleep(std::time::Duration::from_secs(2));
         return Ok(());
     }
 
     if Menu::confirm_execution(plan.actions.len())? {
-        let spinner = UI::loading("変更を適用中...");
+        UI::section("変更を適用中");
         RecordManager::apply(&plan)?;
-        spinner.finish_and_clear();
-        UI::success("すべての変更を適用しました。");
+        println!("\n処理が完了しました。メニューに戻ります...");
+        std::thread::sleep(std::time::Duration::from_secs(2));
     } else {
         UI::warning("適用をキャンセルしました。");
+        println!("\nメニューに戻ります...");
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
     Ok(())
+}
+
+fn handle_create_gallery_shortcuts() -> Result<()> {
+    UI::section("プロジェクト成果物のショートカット作成");
+    
+    let root = get_drive_root()?;
+    UI::info(&format!("ルートディレクトリ: {}", root.display()));
+    UI::info("1_projects 以下のプロジェクト成果物を探索し、5_gallery にショートカットを作成します。\n");
+    
+    GalleryManager::create_shortcuts(&root)?;
+    
+    println!("\n処理が完了しました。メニューに戻ります...");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    Ok(())
+}
+
+fn handle_ensure_structure() -> Result<()> {
+    UI::section("標準フォルダ構造の確認と作成");
+    
+    let root = get_drive_root()?;
+    UI::info("標準フォルダ構造に従って、不足しているフォルダを自動作成します。\n");
+    
+    StructureManager::ensure_standard_structure(&root)?;
+    
+    println!("\n処理が完了しました。メニューに戻ります...");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    Ok(())
+}
+
+fn get_drive_root() -> Result<PathBuf> {
+    let current = std::env::current_dir()?;
+    let mut root = current.clone();
+    while let Some(parent) = root.parent() {
+        root = parent.to_path_buf();
+    }
+    Ok(root)
 }
 
 /// 現在のドライブのルートから辿って record フォルダを検出する
